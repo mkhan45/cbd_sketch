@@ -1,5 +1,8 @@
 #![allow(dead_code)]
 
+mod tf;
+use tf::{TypedEval, TypedValidate, CBD};
+
 trait Balloon {
     fn maybe_true(&self) -> bool;
     fn maybe_false(&self) -> bool;
@@ -10,12 +13,13 @@ impl Balloon for bool {
     fn maybe_false(&self) -> bool { !self }
 }
 
-struct Idk;
+pub struct Idk;
 impl Balloon for Idk {
     fn maybe_true(&self) -> bool { true }
     fn maybe_false(&self) -> bool { true }
 }
 
+#[macro_export]
 macro_rules! cbdif {
     (if ($cond:expr) then $t:expr, else $e:expr) => {
         let ceval = $cond;
@@ -102,15 +106,17 @@ macro_rules! cbd {
     }
 }
 
+#[macro_export]
 macro_rules! mk_opcodes {
     ($(($op:ident, $f:ident)),*) => {
         #[derive(Debug, Copy, Clone)]
-        enum Opcode {
+        pub enum Opcode {
             $(
                 $op,
             )*
         }
 
+        #[macro_export]
         macro_rules! op_dispatch {
             ($dispatch_op:expr, $dispatcher:expr) => {{
                 use Opcode::*;
@@ -135,12 +141,12 @@ mk_opcodes! {
 }
 
 #[derive(Copy, Clone)]
-enum CodeEntry {
+pub enum CodeEntry {
     Op(Opcode),
     I32Imm(i32),
     BlockType(usize),
 }
-struct CodePtr {
+pub struct CodePtr {
     pub code: Vec<CodeEntry>,
     pub ip: usize,
 }
@@ -174,12 +180,12 @@ impl CodePtr {
 }
 
 #[derive(Debug, Copy, Clone)]
-struct STEntry {
+pub struct STEntry {
     pub ip_delta: isize,
     pub stp_delta: isize,
 }
 
-struct Eval {
+pub struct Eval {
     pub stack: Vec<i32>,
     pub locals: Vec<i32>,
     pub codeptr: CodePtr,
@@ -243,7 +249,7 @@ impl Eval {
 }
 
 #[derive(Copy, Clone, Eq, PartialEq)]
-enum Type {
+pub enum Type {
     I32,
 }
 
@@ -255,13 +261,13 @@ enum CtlType {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-struct CtlEntry {
+pub struct CtlEntry {
     tipe: CtlType,
     cont_ip: usize,
     cont_stp: usize, // essentially idx of first branch
 }
 
-struct SidetableMeta {
+pub struct SidetableMeta {
     br_ip: usize,
     target_ctl_idx: usize,
 }
@@ -373,6 +379,22 @@ impl Validate {
     cbd!();
 }
 
+impl TypedEval {
+    fn dispatch(&mut self) {
+        while let Some(op) = self.codeptr_mut().read_op() {
+            op_dispatch!(op, self)
+        }
+    }
+}
+
+impl TypedValidate {
+    fn dispatch(&mut self) {
+        while let Some(op) = self.codeptr_mut().read_op() {
+            op_dispatch!(op, self)
+        }
+    }
+}
+
 fn main() {
     use CodeEntry::*;
     use Opcode::*;
@@ -426,10 +448,33 @@ fn main() {
     let mut eval = Eval {
         stack: vec![],
         locals: vec![0; nlocals],
-        codeptr: CodePtr { code, ip: 0 },
-        sidetable,
+        codeptr: CodePtr { code: code.clone(), ip: 0 },
+        sidetable: sidetable,
         stp: 0,
     };
     eval.dispatch();
     dbg!(eval.stack);
+
+    let mut tvalidate = TypedValidate {
+        stack: vec![],
+        locals: vec![Type::I32; nlocals],
+        ctl_entries: vec![CtlEntry { tipe: CtlType::Func, cont_ip: code.len(), cont_stp: 0 }],
+        ctl_stack: vec![0],
+        codeptr: CodePtr { code: code.clone(), ip: 0 },
+        sidetable_meta: vec![SidetableMeta { br_ip: 0, target_ctl_idx: 0 } ],
+    };
+    tvalidate.dispatch();
+    // dbg!(&validate.ctl_stack);
+    // dbg!(&validate.ctl_entries);
+    let sidetable = tvalidate.build_sidetable();
+
+    let mut teval = TypedEval {
+        stack: vec![],
+        locals: vec![0; nlocals],
+        codeptr: CodePtr { code, ip: 0 },
+        sidetable,
+        stp: 0,
+    };
+    teval.dispatch();
+    dbg!(teval.stack);
 }
