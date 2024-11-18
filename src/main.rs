@@ -42,9 +42,33 @@ macro_rules! cbd {
             self.pushi(z);
         }
 
+        fn cbd_local_set(&mut self) {
+            let idx = self.codeptr.read_imm_i32();
+            let val = self.pop();
+            self.set_local(idx, val);
+        }
+
+        fn cbd_local_get(&mut self) {
+            let idx = self.codeptr.read_imm_i32();
+            let local = self.get_local(idx);
+            self.push(local);
+        }
+
+        fn cbd_local_tee(&mut self) {
+            let idx = self.codeptr.read_imm_i32();
+            let val = self.pop(); // TODO: peek()?
+            self.push(val);
+            self.set_local(idx, val);
+        }
+
         fn cbd_block(&mut self) {
             let ty = self.codeptr.read_block_type();
             self.start_block(ty);
+        }
+
+        fn cbd_loop(&mut self) {
+            let ty = self.codeptr.read_block_type();
+            self.start_loop(ty);
         }
 
         fn cbd_br(&mut self) {
@@ -57,7 +81,6 @@ macro_rules! cbd {
             let condv = self.popi();
             let condb = Self::i32_eqz(condv); // make it a member fn just in case it could mutate,
                                               // like for compiler
-
             cbdif! {
                 if (condb) then {
                     self.fallthru();
@@ -72,29 +95,43 @@ macro_rules! cbd {
         }
 
         fn dispatch(&mut self) {
-            use Opcode::*;
-
             while let Some(op) = self.codeptr.read_op() {
-                // could probably be macro'd
-                match op {
-                    I32Const => self.cbd_i32_const(),
-                    I32Add => self.cbd_i32_add(),
-                    Block => self.cbd_block(),
-                    End => self.cbd_end(),
-                    Br => self.cbd_br(),
-                }
+                op_dispatch!(op, self)
             }
         }
     }
 }
 
-#[derive(Copy, Clone)]
-enum Opcode {
-    I32Const,
-    I32Add,
-    Block,
-    End,
-    Br,
+macro_rules! mk_opcodes {
+    ($(($op:ident, $f:ident)),*) => {
+        #[derive(Debug, Copy, Clone)]
+        enum Opcode {
+            $(
+                $op,
+            )*
+        }
+
+        macro_rules! op_dispatch {
+            ($dispatch_op:expr, $dispatcher:expr) => {{
+                use Opcode::*;
+                match $dispatch_op {
+                    $($op => $dispatcher.$f()),*
+                }
+            }}
+        }
+    }
+}
+
+mk_opcodes! {
+    (I32Const, cbd_i32_const),
+    (I32Add, cbd_i32_add),
+    (LocalSet, cbd_local_set),
+    (LocalGet, cbd_local_get),
+    (Block, cbd_block),
+    (Loop, cbd_loop),
+    (End, cbd_end),
+    (Br, cbd_br),
+    (BrIf, cbd_br_if)
 }
 
 #[derive(Copy, Clone)]
@@ -139,11 +176,12 @@ impl CodePtr {
 #[derive(Debug, Copy, Clone)]
 struct STEntry {
     pub ip_delta: isize,
-    pub target_stp: usize, // not sure why wizard uses deltas?
+    pub stp_delta: isize,
 }
 
 struct Eval {
     pub stack: Vec<i32>,
+    pub locals: Vec<i32>,
     pub codeptr: CodePtr,
     pub sidetable: Vec<STEntry>,
     pub stp: usize,
@@ -161,7 +199,23 @@ impl Eval {
         self.stack.push(x)
     }
 
+    fn push(&mut self, x: i32) {
+        self.stack.push(x)
+    }
+    fn pop(&mut self) -> i32 {
+        self.stack.pop().unwrap()
+    }
+
+    fn set_local(&mut self, idx: i32, val: i32) {
+        self.locals[idx as usize] = val;
+    }
+
+    fn get_local(&mut self, idx: i32) -> i32 {
+        self.locals[idx as usize]
+    }
+
     fn start_block(&mut self, _ty_index: usize) { }
+    fn start_loop(&mut self, _ty_index: usize) { }
     fn end(&mut self) { }
 
     fn addi32(x: i32, y: i32) -> i32 {
@@ -173,34 +227,38 @@ impl Eval {
     }
 
     fn branch(&mut self, _label_idx: usize) {
+        self.stp += 1;
         let ste = self.sidetable[self.stp];
-        self.codeptr.ip = ((self.codeptr.ip as isize) + ste.ip_delta) as usize; // lame
-        self.stp = ste.target_stp;
+        // stupid casts
+        self.codeptr.ip = ((self.codeptr.ip as isize) + ste.ip_delta) as usize;
+        self.stp = ((self.stp as isize) + ste.stp_delta) as usize;
     }
 
     fn fallthru(&mut self) {
-        self.codeptr.ip += 1;
+        self.stp += 1; // we know that only one of branch or fallthru will run in this case,
+                       // but seems iffy
     }
 
     cbd!();
 }
 
-#[derive(Eq, PartialEq)]
+#[derive(Copy, Clone, Eq, PartialEq)]
 enum Type {
     I32,
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 enum CtlType {
     Func,
     Block,
     Loop,
 }
 
+#[derive(Debug, PartialEq, Eq)]
 struct CtlEntry {
     tipe: CtlType,
     cont_ip: usize,
-    stp: usize, // essentially idx of first branch
+    cont_stp: usize, // essentially idx of first branch
 }
 
 struct SidetableMeta {
@@ -210,8 +268,9 @@ struct SidetableMeta {
 
 struct Validate {
     pub stack: Vec<Type>,
-    pub ctl_stack: Vec<CtlEntry>,
-    pub ctl_sp: usize,
+    pub locals: Vec<Type>,
+    pub ctl_entries: Vec<CtlEntry>,
+    pub ctl_stack: Vec<usize>,
     pub codeptr: CodePtr,
     pub sidetable_meta: Vec<SidetableMeta>, // idx = br_index
 }
@@ -231,13 +290,42 @@ impl Validate {
         self.stack.push(Type::I32)
     }
 
+    fn push(&mut self, t: Type) {
+        self.stack.push(t)
+    }
+
+    fn pop(&mut self) -> Type {
+        self.stack.pop().unwrap()
+    }
+
+    fn set_local(&mut self, idx: i32, val: Type) {
+        self.locals[idx as usize] = val;
+    }
+
+    fn get_local(&mut self, idx: i32) -> Type {
+        self.locals[idx as usize]
+    }
+
+    fn is_loop(&self) -> bool {
+        self.ctl_entries.last().unwrap().tipe == CtlType::Loop
+    }
+
     fn start_block(&mut self, _ty_index: usize) {
-        self.ctl_stack.push(CtlEntry {
+        self.ctl_stack.push(self.ctl_entries.len());
+        self.ctl_entries.push(CtlEntry {
             tipe: CtlType::Block,
             cont_ip: 0, // filled in later
-            stp: 0, // filled in later
+            cont_stp: self.sidetable_meta.len() - 1,
         });
-        self.ctl_sp += 1;
+    }
+
+    fn start_loop(&mut self, _ty_index: usize) { 
+        self.ctl_stack.push(self.ctl_entries.len());
+        self.ctl_entries.push(CtlEntry {
+            tipe: CtlType::Loop,
+            cont_ip: self.codeptr.ip,
+            cont_stp: self.sidetable_meta.len() - 1,
+        });
     }
 
     fn addi32(_: Type, _: Type) -> Type {
@@ -250,35 +338,34 @@ impl Validate {
     }
 
     fn branch(&mut self, label_idx: usize) {
-        let st_idx = self.ctl_sp - 1 - label_idx;
-        if let Some(prev_br) = self.sidetable_meta.last_mut() {
-            prev_br.target_ctl_idx = self.ctl_sp - 1;
-        }
+        let ctl_idx = self.ctl_stack.last().unwrap() - label_idx;
         self.sidetable_meta.push(SidetableMeta {
             br_ip: self.codeptr.ip,
-            target_ctl_idx: 0, // filled later by line above
+            target_ctl_idx: ctl_idx,
         });
-        let _target_ctl = &self.ctl_stack[st_idx];
         // validate
     }
 
     fn fallthru(&mut self) {
-        self.codeptr.ip += 1;
+        // validate
     }
 
     fn end(&mut self) {
-        let ctl = &mut self.ctl_stack[self.ctl_sp - 1];
+        let ctl_idx = self.ctl_stack.pop().unwrap();
+        let ctl = &mut self.ctl_entries[ctl_idx];
         if ctl.tipe == CtlType::Block {
             ctl.cont_ip = self.codeptr.ip;
+            ctl.cont_stp = self.sidetable_meta.len() - 1;
         }
     }
 
     fn build_sidetable(&self) -> Vec<STEntry> {
-        self.sidetable_meta.iter().map(|br_meta| {
-            let target_ctl = &self.ctl_stack[br_meta.target_ctl_idx];
+        self.sidetable_meta.iter().enumerate().map(|(stp, br_meta)| {
+            let target_ctl_idx = br_meta.target_ctl_idx;
+            let target_ctl = &self.ctl_entries[target_ctl_idx];
             STEntry {
                 ip_delta: (target_ctl.cont_ip as isize) - (br_meta.br_ip as isize),
-                target_stp: target_ctl.stp,
+                stp_delta: (target_ctl.cont_stp as isize) - (stp as isize),
             }
         }).collect()
     }
@@ -292,26 +379,53 @@ fn main() {
     let code = vec![
         Op(I32Const), I32Imm(5),
         Op(Block), BlockType(0),
-            Op(I32Const), I32Imm(15),
-            Op(I32Const), I32Imm(-20),
-            Op(Br), I32Imm(0),
+            Op(I32Const), I32Imm(-15),
+            Op(I32Const), I32Imm(20),
             Op(I32Add),
+            Op(I32Add),
+            Op(Br), I32Imm(0),
+            Op(I32Const), I32Imm(-999),
         Op(End),
+
+        Op(LocalSet), I32Imm(0), // index
+
+        Op(I32Const), I32Imm(0), // accumulator
+        Op(LocalSet), I32Imm(1),
+
+        Op(Loop), BlockType(0),
+            Op(LocalGet),I32Imm(0), // add
+            Op(LocalGet),I32Imm(1),
+            Op(I32Add),
+            Op(LocalSet), I32Imm(1),
+
+            Op(LocalGet),I32Imm(0), // decr/test
+            Op(I32Const), I32Imm(-1),
+            Op(I32Add),
+            Op(LocalSet), I32Imm(0),
+            Op(LocalGet),I32Imm(0),
+            Op(BrIf), I32Imm(0),
+        Op(End),
+        Op(LocalGet),I32Imm(1),
     ];
+
+    let nlocals = 2;
 
     let mut validate = Validate {
         stack: vec![],
-        ctl_stack: vec![CtlEntry { tipe: CtlType::Func, cont_ip: code.len(), stp: 0 }],
-        ctl_sp: 0,
+        locals: vec![Type::I32; nlocals],
+        ctl_entries: vec![CtlEntry { tipe: CtlType::Func, cont_ip: code.len(), cont_stp: 0 }],
+        ctl_stack: vec![0],
         codeptr: CodePtr { code: code.clone(), ip: 0 },
-        sidetable_meta: vec![],
+        sidetable_meta: vec![SidetableMeta { br_ip: 0, target_ctl_idx: 0 } ],
     };
     validate.dispatch();
+    // dbg!(&validate.ctl_stack);
+    // dbg!(&validate.ctl_entries);
     let sidetable = validate.build_sidetable();
-    dbg!(&sidetable);
 
     let mut eval = Eval {
         stack: vec![],
+        locals: vec![0; nlocals],
         codeptr: CodePtr { code, ip: 0 },
         sidetable,
         stp: 0,
