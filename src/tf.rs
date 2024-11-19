@@ -1,5 +1,9 @@
 use crate::{CodePtr, Balloon, cbdif, STEntry, Type, SidetableMeta, CtlEntry, Idk, CtlType};
 
+// I don't think Virgil really has the type system
+// to check this, but it might make sense to build
+// it the DSL such that typechecking the resulting virgil
+// makes sure these are consistent
 pub trait CBD {
     type I32Val;
     type StackVal: Clone + Into<Self::LocalVal>;
