@@ -3,6 +3,8 @@
 mod tf;
 use tf::{TypedEval, TypedValidate, CBD};
 
+mod cps;
+
 trait Balloon {
     fn maybe_true(&self) -> bool;
     fn maybe_false(&self) -> bool;
