@@ -346,7 +346,7 @@ impl Validate {
     }
 
     fn branch(&mut self, label_idx: usize) {
-        let ctl_idx = self.ctl_stack.last().unwrap() - label_idx;
+        let ctl_idx = self.ctl_stack[self.ctl_stack.len() - 1 - label_idx];
         self.sidetable_meta.push(SidetableMeta {
             br_ip: self.codeptr.ip,
             target_ctl_idx: ctl_idx,
