@@ -1,12 +1,10 @@
 use crate::{CodePtr, CodeEntry, Balloon, cbdif, STEntry, Type, SidetableMeta, Idk, CtlType, Opcode};
 
-pub trait CBD {
-    type I32Val;
+pub trait CPSCBD {
+    type I32Val: Clone + From<i32>;
     type StackVal: Clone + Into<Self::LocalVal>;
     type LocalVal: Clone + Into<Self::StackVal>;
     type CondVal: Balloon;
-
-    fn codeptr_mut(&mut self) -> &mut CodePtr;
 
     fn popi(&mut self) -> Self::I32Val;
     fn pushi_imm(&mut self, x: i32);
@@ -20,6 +18,7 @@ pub trait CBD {
 
     // fn push_state(&mut self);
     fn xfer_state(&mut self, stp: usize);
+    fn cond_xfer_state(&mut self, cond: Self::CondVal, left_stp: usize, right_stp: usize);
 
     fn start_block(&mut self, ty_index: usize);
     fn start_loop(&mut self, ty_index: usize);
@@ -31,9 +30,8 @@ pub trait CBD {
     fn branch(&mut self, label_idx: usize);
     fn fallthru(&mut self);
 
-    fn cbd_i32_const(&mut self) {
-        let x = self.codeptr_mut().read_imm_i32();
-        self.pushi_imm(x);
+    fn cbd_i32_const(&mut self, x: i32) {
+        self.pushi(x.into());
     }
 
     fn cbd_i32_add(&mut self) {

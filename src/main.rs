@@ -5,6 +5,7 @@ use tf::{TypedEval, TypedValidate, TypedCompiler, CBD};
 
 mod cps;
 
+#[cfg(test)]
 mod test;
 
 trait Balloon {
