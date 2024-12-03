@@ -213,6 +213,7 @@ impl WASMFun {
         }
     }
 
+    // this is bad because it can't handle multiple simultaneous out-branches
     pub fn run<I: CPSCBD>(&mut self, mut interpreter: I) -> I {
         let mut codeptr = CodePtr { code: std::mem::take(&mut self.code), ip: 0 };
         let mut current_block = 0;
@@ -272,7 +273,10 @@ impl WASMFun {
         interpreter
     }
 
-    pub fn compile<I: CPSCBDDebug>(self) -> CompiledFun<I> where <I as CPSCBD>::StackVal: std::fmt::Debug {
+    // TODO:
+    // make a run() that iterates current_block in this style and uses xfer_state and fetch_state()
+    // or similar.
+    pub fn compile<I: CPSCBD>(self) -> CompiledFun<I> {
         let mut res = CompiledFun { conts: vec![] };
 
         for current_block in 0..self.cont_blocks.len() {
@@ -283,6 +287,7 @@ impl WASMFun {
 
             res.conts.push(Box::new(move |compiled: *const CompiledFun<I>, mut interpreter: I, codeptr: &mut CodePtr| unsafe {
                 codeptr.ip = start_ip;
+                // TODO: xfer state into this cont
                 while let Some(op) = codeptr.next() {
                     use {Opcode::*, CodeEntry::*};
                     match op {
