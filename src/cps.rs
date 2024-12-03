@@ -16,8 +16,8 @@ pub trait CPSCBD {
     fn set_local(&mut self, idx: i32, val: Self::LocalVal);
     fn get_local(&mut self, idx: i32) -> Self::LocalVal;
 
-    fn xfer_state(&mut self, stp: usize);
-    fn cond_xfer_state(&mut self, cond: Self::CondVal, left_stp: usize, right_stp: usize);
+    fn xfer_state(&mut self, stp: usize) -> usize;
+    fn cond_xfer_state(&mut self, cond: Self::CondVal, left_stp: usize, right_stp: usize) -> usize;
 
     fn i32_add(&mut self, x: Self::I32Val, y: Self::I32Val) -> Self::I32Val;
     fn i32_eqz(&mut self, x: Self::I32Val) -> Self::CondVal;
@@ -49,24 +49,28 @@ pub trait CPSCBD {
         self.set_local(idx, val.into());
     }
 
-    fn cbd_block(&mut self, typ_idx: i32) {
+    fn cbd_block(&mut self, typ_idx: usize) {
     }
 
-    fn cbd_loop(&mut self, typ_idx: i32) {
+    fn cbd_loop(&mut self, typ_idx: usize) {
     }
 
-    fn cbd_br(&mut self, target_stp: usize) {
-        self.xfer_state(target_stp);
+    fn cbd_br(&mut self, target_stp: usize) -> usize {
+        self.xfer_state(target_stp)
     }
 
-    fn cbd_br_if(&mut self, target_stp: usize, fallthru_stp: usize) {
+    fn cbd_br_if(&mut self, target_stp: usize, fallthru_stp: usize) -> usize {
         let condv = self.popi();
         let condb = self.i32_eqz(condv);
-        self.cond_xfer_state(condb, fallthru_stp, target_stp);
+        self.cond_xfer_state(condb, fallthru_stp, target_stp)
     }
     
     fn cbd_end(&mut self) {
     }
+}
+
+pub trait CPSCBDDebug: CPSCBD + std::fmt::Debug {
+    fn stack(&self) -> &[Self::StackVal];
 }
 
 pub struct WASMFun {
@@ -195,6 +199,12 @@ impl WASMFun {
             cont_blocks.push(ContBlock { ip, br_tgt });
         }
 
+        let last_cont = &conts[conts.len() - 1];
+        cont_blocks.push(ContBlock {
+            ip: last_cont.ip,
+            br_tgt: 0,
+        });
+
         Self {
             code,
             conts,
@@ -224,11 +234,11 @@ impl WASMFun {
                     interpreter.cbd_local_get(local_idx);
                 }
                 Op(Block) => {
-                    let typ_idx = codeptr.read_imm_i32(); 
+                    let typ_idx = codeptr.read_block_type(); 
                     interpreter.cbd_block(typ_idx);
                 }
                 Op(Loop) => {
-                    let typ_idx = codeptr.read_imm_i32(); 
+                    let typ_idx = codeptr.read_block_type(); 
                     interpreter.cbd_loop(typ_idx);
                     current_block += 1;
                 }
@@ -236,15 +246,19 @@ impl WASMFun {
                     let _depth = codeptr.read_imm_i32();
                     let cur_block = self.cont_blocks[current_block];
                     let tgt_block = cur_block.br_tgt;
-                    interpreter.cbd_br(tgt_block);
-                    current_block += 1;
+                    let end_block = interpreter.cbd_br(tgt_block);
+
+                    current_block = end_block;
+                    codeptr.ip = self.cont_blocks[current_block].ip;
                 }
                 Op(BrIf) => {
                     let _depth = codeptr.read_imm_i32();
                     let cur_block = self.cont_blocks[current_block];
                     let tgt_block = cur_block.br_tgt;
-                    interpreter.cbd_br_if(tgt_block, current_block + 1);
-                    current_block += 1;
+                    let end_block = interpreter.cbd_br_if(tgt_block, current_block + 1);
+
+                    current_block = end_block;
+                    codeptr.ip = self.cont_blocks[current_block].ip;
                 }
                 Op(End) => {
                     interpreter.cbd_end();
@@ -256,5 +270,138 @@ impl WASMFun {
 
         self.code = codeptr.code;
         interpreter
+    }
+
+    pub fn compile<I: CPSCBDDebug>(self) -> CompiledFun<I> where <I as CPSCBD>::StackVal: std::fmt::Debug {
+        let mut res = CompiledFun { conts: vec![] };
+
+        for current_block in 0..self.cont_blocks.len() {
+            let start_ip = self.cont_blocks[current_block].ip;
+            let tgt_block = self.cont_blocks[current_block].br_tgt;
+
+            let fallthru_block = current_block + 1;
+
+            res.conts.push(Box::new(move |compiled: *const CompiledFun<I>, mut interpreter: I, codeptr: &mut CodePtr| unsafe {
+                codeptr.ip = start_ip;
+                while let Some(op) = codeptr.next() {
+                    use {Opcode::*, CodeEntry::*};
+                    match op {
+                        Op(I32Const) => {
+                            let imm = codeptr.read_imm_i32();
+                            interpreter.cbd_i32_const(imm);
+                        }
+                        Op(I32Add) => interpreter.cbd_i32_add(),
+                        Op(LocalSet) => {
+                            let local_idx = codeptr.read_imm_i32();
+                            interpreter.cbd_local_set(local_idx);
+                        }
+                        Op(LocalGet) => {
+                            let local_idx = codeptr.read_imm_i32();
+                            interpreter.cbd_local_get(local_idx);
+                        }
+                        Op(Block) => {
+                            let typ_idx = codeptr.read_block_type(); 
+                            interpreter.cbd_block(typ_idx);
+                        }
+                        Op(Loop) => {
+                            let typ_idx = codeptr.read_block_type(); 
+                            interpreter.cbd_loop(typ_idx);
+
+                            let cont = &(*compiled).conts[fallthru_block];
+                            return cont(compiled, interpreter, codeptr);
+                        }
+                        Op(Br) => {
+                            let _depth = codeptr.read_imm_i32();
+
+                            let cont = &(*compiled).conts[tgt_block];
+                            return cont(compiled, interpreter, codeptr);
+                        }
+                        Op(BrIf) => {
+                            let _depth = codeptr.read_imm_i32();
+                            let end_block = interpreter.cbd_br_if(tgt_block, fallthru_block);
+
+                            let cont = &(*compiled).conts[end_block];
+                            return cont(compiled, interpreter, codeptr);
+                        }
+                        Op(End) => {
+                            interpreter.cbd_end();
+
+                            let cont = &(*compiled).conts[fallthru_block];
+                            return cont(compiled, interpreter, codeptr);
+                        }
+                        _ => {
+                            dbg!(op);
+                            panic!();
+                        }
+                    }
+                }
+                return interpreter
+            }));
+        }
+        res.conts.push(Box::new(|_, i, _| i));
+
+        res
+    }
+}
+
+pub struct CompiledFun<I: CPSCBD> {
+    pub conts: Vec<Box<dyn Fn(*const CompiledFun<I>, I, &mut CodePtr) -> I>>,
+}
+
+#[derive(Debug)]
+pub struct CPSEval {
+    pub stack: Vec<i32>,
+    pub locals: Vec<i32>,
+}
+
+impl CPSCBD for CPSEval {
+    type I32Val = i32;
+    type StackVal = i32;
+    type LocalVal = i32;
+    type CondVal = bool;
+
+    fn popi(&mut self) -> i32 {
+        self.stack.pop().unwrap()
+    }
+
+    fn pushi_imm(&mut self, x: i32) {
+        self.pushi(x)
+    }
+    fn pushi(&mut self, x: i32) {
+        self.stack.push(x)
+    }
+
+    fn push(&mut self, x: i32) {
+        self.stack.push(x)
+    }
+    fn pop(&mut self) -> i32 {
+        self.stack.pop().unwrap()
+    }
+
+    fn set_local(&mut self, idx: i32, val: i32) {
+        self.locals[idx as usize] = val;
+    }
+
+    fn get_local(&mut self, idx: i32) -> i32 {
+        self.locals[idx as usize]
+    }
+
+    fn i32_add(&mut self, x: i32, y: i32) -> i32 {
+        x + y
+    }
+
+    fn i32_eqz(&mut self, x: i32) -> bool {
+        x == 0
+    }
+
+    fn xfer_state(&mut self, stp: usize) -> usize { stp }
+    fn cond_xfer_state(&mut self, cond: bool, left_stp: usize, right_stp: usize) -> usize { 
+        if cond { left_stp } else { right_stp }
+    }
+}
+
+impl CPSCBDDebug for CPSEval {
+    fn stack(&self) -> &[i32] {
+        &self.stack
     }
 }

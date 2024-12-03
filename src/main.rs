@@ -145,7 +145,7 @@ mk_opcodes! {
     (BrIf, cbd_br_if)
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub enum CodeEntry {
     Op(Opcode),
     I32Imm(i32),
@@ -503,6 +503,23 @@ fn main() {
     // tcompiler.dispatch();
     // println!("{}", tcompiler.gen);
 
-    let wasm_fun = cps::WASMFun::new(code);
-    dbg!(wasm_fun.cont_blocks);
+    let mut wasm_fun = cps::WASMFun::new(code.clone());
+    dbg!(&wasm_fun.cont_blocks);
+
+    let mut interpreter = cps::CPSEval { stack: vec![], locals: vec![0; nlocals] };
+    let interpreter = wasm_fun.run(interpreter);
+    dbg!(interpreter.stack);
+
+    unsafe {
+        let mut interpreter = cps::CPSEval { stack: vec![], locals: vec![0; nlocals] };
+        let mut codeptr = CodePtr { code: code.clone(), ip: 0 };
+
+        let compiled = wasm_fun.compile::<cps::CPSEval>();
+        let compiled_ptr: *const _ = &compiled;
+
+        let first_cont = &(*compiled_ptr).conts[0];
+        let interpreter = first_cont(compiled_ptr, interpreter, &mut codeptr);
+
+        dbg!(interpreter.stack);
+    }
 }
