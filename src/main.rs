@@ -414,12 +414,12 @@ fn sum_code() -> Vec<CodeEntry> {
     vec![
         Op(I32Const), I32Imm(5),
         Op(Block), BlockType(0),
-        Op(I32Const), I32Imm(-15),
-        Op(I32Const), I32Imm(20),
-        Op(I32Add),
-        Op(I32Add),
-        Op(Br), I32Imm(0),
-        Op(I32Const), I32Imm(-999),
+            Op(I32Const), I32Imm(-15),
+            Op(I32Const), I32Imm(20),
+            Op(I32Add),
+            Op(I32Add),
+            Op(Br), I32Imm(0),
+            Op(I32Const), I32Imm(-999),
         Op(End),
 
         Op(LocalSet), I32Imm(0), // index
@@ -428,17 +428,17 @@ fn sum_code() -> Vec<CodeEntry> {
         Op(LocalSet), I32Imm(1),
 
         Op(Loop), BlockType(0),
-        Op(LocalGet),I32Imm(0), // add
-        Op(LocalGet),I32Imm(1),
-        Op(I32Add),
-        Op(LocalSet), I32Imm(1),
+            Op(LocalGet),I32Imm(0), // add
+            Op(LocalGet),I32Imm(1),
+            Op(I32Add),
+            Op(LocalSet), I32Imm(1),
 
-        Op(LocalGet),I32Imm(0), // decr/test
-        Op(I32Const), I32Imm(-1),
-        Op(I32Add),
-        Op(LocalSet), I32Imm(0),
-        Op(LocalGet),I32Imm(0),
-        Op(BrIf), I32Imm(0),
+            Op(LocalGet),I32Imm(0), // decr/test
+            Op(I32Const), I32Imm(-1),
+            Op(I32Add),
+            Op(LocalSet), I32Imm(0),
+            Op(LocalGet),I32Imm(0),
+            Op(BrIf), I32Imm(0),
         Op(End),
         Op(LocalGet),I32Imm(1),
     ]
@@ -495,11 +495,14 @@ fn main() {
     teval.dispatch();
     dbg!(teval.stack);
 
-    let mut tcompiler = TypedCompiler {
-        gen: String::new(),
-        codeptr: CodePtr { code: code.clone(), ip: 0 },
-        ic: 0,
-    };
-    tcompiler.dispatch();
-    println!("{}", tcompiler.gen);
+    // let mut tcompiler = TypedCompiler {
+    //     gen: String::new(),
+    //     codeptr: CodePtr { code: code.clone(), ip: 0 },
+    //     ic: 0,
+    // };
+    // tcompiler.dispatch();
+    // println!("{}", tcompiler.gen);
+
+    let wasm_fun = cps::WASMFun::new(code);
+    dbg!(wasm_fun.cont_blocks);
 }

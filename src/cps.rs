@@ -16,19 +16,11 @@ pub trait CPSCBD {
     fn set_local(&mut self, idx: i32, val: Self::LocalVal);
     fn get_local(&mut self, idx: i32) -> Self::LocalVal;
 
-    // fn push_state(&mut self);
     fn xfer_state(&mut self, stp: usize);
     fn cond_xfer_state(&mut self, cond: Self::CondVal, left_stp: usize, right_stp: usize);
 
-    fn start_block(&mut self, ty_index: usize);
-    fn start_loop(&mut self, ty_index: usize);
-    fn end(&mut self);
-
     fn i32_add(&mut self, x: Self::I32Val, y: Self::I32Val) -> Self::I32Val;
     fn i32_eqz(&mut self, x: Self::I32Val) -> Self::CondVal;
-
-    fn branch(&mut self, label_idx: usize);
-    fn fallthru(&mut self);
 
     fn cbd_i32_const(&mut self, x: i32) {
         self.pushi(x.into());
@@ -41,56 +33,39 @@ pub trait CPSCBD {
         self.pushi(z);
     }
 
-    fn cbd_local_set(&mut self) {
-        let idx = self.codeptr_mut().read_imm_i32();
+    fn cbd_local_set(&mut self, idx: i32) {
         let val = self.pop();
         self.set_local(idx, val.into());
     }
 
-    fn cbd_local_get(&mut self) {
-        let idx = self.codeptr_mut().read_imm_i32();
+    fn cbd_local_get(&mut self, idx: i32) {
         let local = self.get_local(idx);
         self.push(local.into());
     }
 
-    fn cbd_local_tee(&mut self) {
-        let idx = self.codeptr_mut().read_imm_i32();
+    fn cbd_local_tee(&mut self, idx: i32) {
         let val = self.pop(); // TODO: peek()?
         self.push(val.clone());
         self.set_local(idx, val.into());
     }
 
-    fn cbd_block(&mut self) {
-        let ty = self.codeptr_mut().read_block_type();
-        self.start_block(ty);
+    fn cbd_block(&mut self, typ_idx: i32) {
     }
 
-    fn cbd_loop(&mut self) {
-        let ty = self.codeptr_mut().read_block_type();
-        self.start_loop(ty);
+    fn cbd_loop(&mut self, typ_idx: i32) {
     }
 
-    fn cbd_br(&mut self) {
-        let label_idx = self.codeptr_mut().read_imm_i32();
-        self.branch(label_idx as usize);
+    fn cbd_br(&mut self, target_stp: usize) {
+        self.xfer_state(target_stp);
     }
 
-    fn cbd_br_if(&mut self) {
-        let label_idx = self.codeptr_mut().read_imm_i32();
+    fn cbd_br_if(&mut self, target_stp: usize, fallthru_stp: usize) {
         let condv = self.popi();
-        let condb = self.i32_eqz(condv); // make it a member fn just in case it could mutate,
-                                          // like for compiler
-        cbdif! {
-            if (condb) then {
-                self.fallthru();
-            }, else {
-                self.branch(label_idx as usize);
-            }
-        }
+        let condb = self.i32_eqz(condv);
+        self.cond_xfer_state(condb, fallthru_stp, target_stp);
     }
     
     fn cbd_end(&mut self) {
-        self.end();
     }
 }
 
@@ -104,14 +79,17 @@ pub struct WASMFun {
     pub cont_blocks: Vec<ContBlock>,
 }
 
+#[derive(Debug)]
 pub struct Cont {
     pub ip: usize,
 }
 
+#[derive(Debug)]
 pub struct Branch {
     pub tgt_idx: usize,
 }
 
+#[derive(Debug, Copy, Clone)]
 pub struct ContBlock {
     pub ip: usize,
     // pub fallthru_cont: usize, // easily found at runtime, just the next ContBlock
@@ -119,6 +97,7 @@ pub struct ContBlock {
     // pub data: T
 }
 
+#[derive(Debug)]
 pub struct CtlEntry {
     pub ty: CtlType,
     pub entry_ip: usize,
@@ -183,11 +162,15 @@ impl WASMFun {
 
                     conts.push(Cont { ip: codeptr.ip });
                     let ctl_idx = ctl_stack[ctl_stack.len() - 1 - depth];
-                    branches.push(Branch { tgt_idx: ctls[ctl_idx].cont_idx });
+                    branches.push(Branch { tgt_idx: ctl_idx });
                 }
-                _ => todo!(),
+                Op(_) => {},
+                I32Imm(_) | BlockType(_) => panic!(),
             }
         }
+
+        dbg!(&conts);
+        dbg!(&branches);
 
         let code = codeptr.code;
 
@@ -199,14 +182,14 @@ impl WASMFun {
 
             let ip = current_cont.ip;
             let br_tgt = {
-                match code[next_cont.ip] {
+                match code[next_cont.ip - 2] {
                     CodeEntry::Op(Opcode::Br | Opcode::BrIf) => {
-                        let cont_idx = branches[br_idx].tgt_idx;
+                        let ctl_idx = branches[br_idx].tgt_idx;
+                        let cont_idx = ctls[ctl_idx].cont_idx;
                         br_idx += 1;
                         cont_idx
                     }
-                    CodeEntry::Op(_) => 0,
-                    _ => panic!(),
+                    _ => 0,
                 }
             };
             cont_blocks.push(ContBlock { ip, br_tgt });
@@ -218,5 +201,60 @@ impl WASMFun {
             branches,
             cont_blocks,
         }
+    }
+
+    pub fn run<I: CPSCBD>(&mut self, mut interpreter: I) -> I {
+        let mut codeptr = CodePtr { code: std::mem::take(&mut self.code), ip: 0 };
+        let mut current_block = 0;
+
+        while let Some(op) = codeptr.next() {
+            use {Opcode::*, CodeEntry::*};
+            match op {
+                Op(I32Const) => {
+                    let imm = codeptr.read_imm_i32();
+                    interpreter.cbd_i32_const(imm);
+                }
+                Op(I32Add) => interpreter.cbd_i32_add(),
+                Op(LocalSet) => {
+                    let local_idx = codeptr.read_imm_i32();
+                    interpreter.cbd_local_set(local_idx);
+                }
+                Op(LocalGet) => {
+                    let local_idx = codeptr.read_imm_i32();
+                    interpreter.cbd_local_get(local_idx);
+                }
+                Op(Block) => {
+                    let typ_idx = codeptr.read_imm_i32(); 
+                    interpreter.cbd_block(typ_idx);
+                }
+                Op(Loop) => {
+                    let typ_idx = codeptr.read_imm_i32(); 
+                    interpreter.cbd_loop(typ_idx);
+                    current_block += 1;
+                }
+                Op(Br) => {
+                    let _depth = codeptr.read_imm_i32();
+                    let cur_block = self.cont_blocks[current_block];
+                    let tgt_block = cur_block.br_tgt;
+                    interpreter.cbd_br(tgt_block);
+                    current_block += 1;
+                }
+                Op(BrIf) => {
+                    let _depth = codeptr.read_imm_i32();
+                    let cur_block = self.cont_blocks[current_block];
+                    let tgt_block = cur_block.br_tgt;
+                    interpreter.cbd_br_if(tgt_block, current_block + 1);
+                    current_block += 1;
+                }
+                Op(End) => {
+                    interpreter.cbd_end();
+                    current_block += 1;
+                }
+                _ => panic!(),
+            }
+        }
+
+        self.code = codeptr.code;
+        interpreter
     }
 }
