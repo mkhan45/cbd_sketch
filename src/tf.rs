@@ -1,5 +1,7 @@
 use crate::{CodePtr, Balloon, cbdif, STEntry, Type, SidetableMeta, CtlEntry, Idk, CtlType};
 
+use std::fmt::Write;
+
 // I don't think Virgil really has the type system
 // to check this, but it might make sense to build
 // it the DSL such that typechecking the resulting virgil
@@ -280,5 +282,96 @@ impl TypedValidate {
                 stp_delta: (target_ctl.cont_stp as isize) - (stp as isize),
             }
         }).collect()
+    }
+}
+
+pub struct TypedCompiler {
+    pub gen: String,
+    pub codeptr: CodePtr,
+    pub ic: usize,
+}
+
+impl TypedCompiler {
+    pub fn fv(&mut self) -> usize {
+        self.ic += 1;
+        self.ic
+    }
+}
+
+impl CBD for TypedCompiler {
+    type I32Val = ();
+    type StackVal = ();
+    type LocalVal = ();
+    type CondVal = Idk;
+
+    fn codeptr_mut(&mut self) -> &mut CodePtr {
+        &mut self.codeptr
+    }
+
+    fn popi(&mut self) -> () {
+        let i = self.fv();
+        writeln!(&mut self.gen, "let x_{i} = self.stack.pop().unwrap();").unwrap();
+    }
+
+    fn pushi_imm(&mut self, x: i32) {
+        writeln!(&mut self.gen, "self.pushi({x});").unwrap();
+    }
+    fn pushi(&mut self, _: ()) {
+        let i = self.ic;
+        writeln!(&mut self.gen, "self.stack.push(x_{i});").unwrap();
+    }
+
+    fn push(&mut self, _: ()) {
+        let i = self.ic;
+        writeln!(&mut self.gen, "self.stack.push(x_{i});").unwrap();
+    }
+    fn pop(&mut self) -> () {
+        let i = self.fv();
+        writeln!(&mut self.gen, "let x_{i} = self.stack.pop().unwrap();").unwrap();
+    }
+
+    fn set_local(&mut self, idx: i32, _: ()) {
+        let i = self.ic;
+        writeln!(&mut self.gen, "self.locals[{idx} as usize] = x_{i};").unwrap();
+    }
+
+    fn get_local(&mut self, idx: i32) -> () {
+        let i = self.fv();
+        writeln!(&mut self.gen, "let x_{i} = self.locals[{idx} as usize];").unwrap();
+    }
+
+    fn start_block(&mut self, _ty_index: usize) { }
+    fn start_loop(&mut self, _ty_index: usize) { }
+    fn end(&mut self) { }
+
+    fn i32_add(&mut self, _: (), _: ()) -> () {
+        let i1 = self.ic - 1;
+        let i2 = self.ic;
+        let i3 = self.fv();
+        writeln!(&mut self.gen, "let x_{i3} = x_{i1} + x_{i2};").unwrap();
+    }
+
+    fn i32_eqz(&mut self, _: ()) -> Idk {
+        let i1 = self.ic;
+        let i2 = self.fv();
+        writeln!(&mut self.gen, "let x_{i2} = x_{i1} == 0;").unwrap();
+        Idk
+    }
+
+    fn branch(&mut self, _label_idx: usize) {
+        writeln!(&mut self.gen,
+        "
+        {{
+            self.stp += 1;
+            let ste = self.sidetable[self.stp];
+            // stupid casts
+            self.codeptr.ip = ((self.codeptr.ip as isize) + ste.ip_delta) as usize;
+            self.stp = ((self.stp as isize) + ste.stp_delta) as usize;
+        }}
+        ").unwrap();
+    }
+
+    fn fallthru(&mut self) {
+        writeln!(&mut self.gen, "self.stp += 1;").unwrap();
     }
 }
