@@ -4,6 +4,7 @@ mod tf;
 use tf::{TypedEval, TypedValidate, TypedCompiler, CBD};
 
 mod cps;
+mod frfr;
 
 #[cfg(test)]
 mod test;

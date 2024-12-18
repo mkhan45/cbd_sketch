@@ -375,3 +375,8 @@ impl CBD for TypedCompiler {
         writeln!(&mut self.gen, "self.stp += 1;").unwrap();
     }
 }
+
+pub struct AbstractCompiler {
+    // TODO generic over cbd?
+    // metastp as input
+}
