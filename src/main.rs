@@ -6,10 +6,12 @@ use tf::{TypedEval, TypedValidate, TypedCompiler, CBD};
 mod cps;
 mod frfr;
 
+use frfr::{CBD_FR, EvalFR};
+
 #[cfg(test)]
 mod test;
 
-trait Balloon {
+pub trait Balloon {
     fn maybe_true(&self) -> bool;
     fn maybe_false(&self) -> bool;
 }
@@ -409,6 +411,23 @@ impl TypedCompiler {
     }
 }
 
+pub trait Run {
+    fn run(&mut self);
+    fn step(&mut self, op: Opcode);
+}
+
+impl<T: CBD_FR> Run for T {
+    fn run(&mut self) {
+        while let Some(op) = self.codeptr_mut().read_op() {
+            op_dispatch!(op, self)
+        }
+    }
+
+    fn step(&mut self, op: Opcode) {
+        op_dispatch!(op, self)
+    }
+}
+
 fn sum_code() -> Vec<CodeEntry> {
     use CodeEntry::*;
     use Opcode::*;
@@ -490,7 +509,7 @@ fn main() {
         stack: vec![],
         locals: vec![0; nlocals],
         codeptr: CodePtr { code: code.clone(), ip: 0 },
-        sidetable,
+        sidetable: sidetable.clone(),
         stp: 0,
     };
     teval.dispatch();
@@ -504,23 +523,33 @@ fn main() {
     // tcompiler.dispatch();
     // println!("{}", tcompiler.gen);
 
-    let mut wasm_fun = cps::WASMFun::new(code.clone());
-    dbg!(&wasm_fun.cont_blocks);
+    // let mut wasm_fun = cps::WASMFun::new(code.clone());
+    // dbg!(&wasm_fun.cont_blocks);
 
-    let mut interpreter = cps::CPSEval { stack: vec![], locals: vec![0; nlocals] };
-    let interpreter = wasm_fun.run(interpreter);
-    dbg!(interpreter.stack);
+    // let mut interpreter = cps::CPSEval { stack: vec![], locals: vec![0; nlocals] };
+    // let interpreter = wasm_fun.run(interpreter);
+    // dbg!(interpreter.stack);
 
-    unsafe {
-        let mut interpreter = cps::CPSEval { stack: vec![], locals: vec![0; nlocals] };
-        let mut codeptr = CodePtr { code: code.clone(), ip: 0 };
+    // unsafe {
+    //     let mut interpreter = cps::CPSEval { stack: vec![], locals: vec![0; nlocals] };
+    //     let mut codeptr = CodePtr { code: code.clone(), ip: 0 };
 
-        let compiled = wasm_fun.compile::<cps::CPSEval>();
-        let compiled_ptr: *const _ = &compiled;
+    //     let compiled = wasm_fun.compile::<cps::CPSEval>();
+    //     let compiled_ptr: *const _ = &compiled;
 
-        let first_cont = &(*compiled_ptr).conts[0];
-        let interpreter = first_cont(compiled_ptr, interpreter, &mut codeptr);
+    //     let first_cont = &(*compiled_ptr).conts[0];
+    //     let interpreter = first_cont(compiled_ptr, interpreter, &mut codeptr);
 
-        dbg!(interpreter.stack);
-    }
+    //     dbg!(interpreter.stack);
+    // }
+
+    let mut fr_eval = EvalFR {
+        stack: vec![],
+        locals: vec![0; nlocals],
+        codeptr: CodePtr { code: code.clone(), ip: 0 },
+        sidetable: sidetable.clone(),
+        stp: 0,
+    };
+    fr_eval.run();
+    dbg!(fr_eval.stack);
 }
