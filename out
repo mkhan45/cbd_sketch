@@ -1,0 +1,84 @@
+const state_0: () = ();
+const state_1: () = ();
+const state_2: () = ();
+const state_3: () = ();
+const state_4: () = ();
+const state_5: () = ();
+
+fn block_0(i: &mut AI, wl: &mut VecDeque<usize>) {
+	i.merge(state_0);
+	i.pushi_imm(5);
+	i.start_block(0);
+	i.pushi_imm(-15);
+	i.pushi_imm(20);
+	let x1 = i.popi();
+	let x2 = i.popi();
+	let x3 = x1 + x2;
+	i.pushi(x3);
+	let x4 = i.popi();
+	let x5 = i.popi();
+	let x6 = x4 + x5;
+	i.pushi(x6);
+	wl.push_back(2);
+} /* block_0 */
+
+fn block_1(i: &mut AI, wl: &mut VecDeque<usize>) {
+	i.merge(state_1);
+	i.pushi_imm(-999);
+	i.end();
+	wl.push_back(2);
+} /* block_1 */
+
+fn block_2(i: &mut AI, wl: &mut VecDeque<usize>) {
+	i.merge(state_2);
+	let x7 = i.pop();
+	i.set_local(0, x7);
+	i.pushi_imm(0);
+	let x8 = i.pop();
+	i.set_local(1, x8);
+	wl.push_back(3);
+} /* block_2 */
+
+fn block_3(i: &mut AI, wl: &mut VecDeque<usize>) {
+	i.merge(state_3);
+	i.start_loop(0);
+	let x9 = i.get_local(0);
+	i.pushi(x9);
+	let x10 = i.get_local(1);
+	i.pushi(x10);
+	let x11 = i.popi();
+	let x12 = i.popi();
+	let x13 = x11 + x12;
+	i.pushi(x13);
+	let x14 = i.pop();
+	i.set_local(1, x14);
+	let x15 = i.get_local(0);
+	i.pushi(x15);
+	i.pushi_imm(-1);
+	let x16 = i.popi();
+	let x17 = i.popi();
+	let x18 = x16 + x17;
+	i.pushi(x18);
+	let x19 = i.pop();
+	i.set_local(0, x19);
+	let x20 = i.get_local(0);
+	i.pushi(x20);
+	let x21 = i.popi();
+	let x22 = i.i32_eqz(x21);
+	
+        let _ = if (x22.maybe_true()) { i.merge(state_4); wl.push_back(4) } else {};
+        let _ = if (x22.maybe_false()) { i.merge(state_3); wl.push_back(3) } else {};
+} /* block_3 */
+
+fn block_4(i: &mut AI, wl: &mut VecDeque<usize>) {
+	i.merge(state_4);
+	i.end();
+	wl.push_back(5);
+} /* block_4 */
+
+fn block_5(i: &mut AI, wl: &mut VecDeque<usize>) {
+	i.merge(state_5);
+	let x23 = i.get_local(1);
+	i.pushi(x23);
+} /* block_5 */
+

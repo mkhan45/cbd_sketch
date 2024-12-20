@@ -6,7 +6,7 @@ use tf::{TypedEval, TypedValidate, TypedCompiler, CBD};
 mod cps;
 mod frfr;
 
-use frfr::{CBD_FR, EvalFR};
+use frfr::{CBD_FR, EvalFR, AbstractCompiler};
 
 #[cfg(test)]
 mod test;
@@ -23,6 +23,12 @@ impl Balloon for bool {
 
 pub struct Idk;
 impl Balloon for Idk {
+    fn maybe_true(&self) -> bool { true }
+    fn maybe_false(&self) -> bool { true }
+}
+
+// for abstract compiler where usize is used as var idx
+impl Balloon for usize {
     fn maybe_true(&self) -> bool { true }
     fn maybe_false(&self) -> bool { true }
 }
@@ -552,4 +558,19 @@ fn main() {
     };
     fr_eval.run();
     dbg!(fr_eval.stack);
+
+    let wasm_fun = crate::cps::WASMFun::new(code.clone());
+    dbg!(&wasm_fun.cont_blocks);
+
+    let mut ac = AbstractCompiler {
+        block_bodies: vec![vec![]; wasm_fun.cont_blocks.len()],
+        var_idx: 0,
+        codeptr: CodePtr { code: code.clone(), ip: 0 },
+        cont_blocks: &wasm_fun.cont_blocks,
+        stp: 0,
+    };
+    ac.run();
+    dbg!(&ac.block_bodies);
+    let code = ac.emit();
+    println!("{}", code);
 }
