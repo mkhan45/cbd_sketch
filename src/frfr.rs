@@ -1,8 +1,12 @@
-use crate::{CodePtr, CodeEntry, Balloon, STEntry, Idk};
+use crate::{CodePtr, CodeEntry, Balloon, STEntry, Idk, Type, CtlEntry, SidetableMeta, CtlType};
 use std::marker::PhantomData;
 use crate::Run;
 use std::collections::VecDeque;
 
+// With run(), control is through codedptr, but we can still merge
+// through MergeState and hit every branch because of Balloon.
+// With compile, codeptr is ignored, and we hit each block potentially
+// multiple times because of the worklist
 #[macro_export]
 macro_rules! mif {
     ($self:ident: if ($cond:expr) then $t:expr, else $e:expr) => {
@@ -303,6 +307,9 @@ impl CBD_FR for AbstractCompiler {
         i
     }
 
+    // this is overriding the default trait impl,
+    // corresponding to a separate tranformation if this was
+    // implemented with metaprogramming
     fn cbd_br_if(&mut self) {
         let _label_idx = self.codeptr_mut().read_imm_i32();
         let condv = self.popi();
@@ -339,11 +346,13 @@ impl CBD_FR for AbstractCompiler {
     }
 }
 
+// TODO: a proper runner?
 impl AbstractCompiler {
     pub fn emit(&self) -> String {
         let mut buf = String::new();
 
         for state_idx in 0..self.block_bodies.len() {
+            // TODO: depends on interpretation mergeval
             buf.push_str(&format!("const state_{state_idx}: () = ();\n"));
         }
 
@@ -499,4 +508,110 @@ fn block_5(i: &mut AI, wl: &mut VecDeque<usize>) {
         BLOCKS[b](&mut interpreter, &mut wl);
     }
     dbg!(interpreter.stack);
+}
+
+pub struct ValidateFR {
+    pub stack: Vec<Type>,
+    pub locals: Vec<Type>,
+    pub ctl_entries: Vec<CtlEntry>,
+    pub ctl_stack: Vec<usize>,
+    pub codeptr: CodePtr,
+    pub sidetable_meta: Vec<SidetableMeta>, // idx = br_index
+}
+
+impl CBD_FR for ValidateFR {
+    type I32Val = Type;
+    type StackVal = Type;
+    type LocalVal = Type;
+    type CondVal = Idk;
+    type MergeState = usize; // stacklen
+
+    fn codeptr_mut(&mut self) -> &mut CodePtr {
+        &mut self.codeptr
+    }
+
+    fn popi(&mut self) -> Type {
+        assert!(self.stack.pop().is_some_and(|t| t == Type::I32));
+        Type::I32
+    }
+
+    fn pushi_imm(&mut self, _: i32) {
+        self.stack.push(Type::I32)
+    }
+
+    fn pushi(&mut self, t: Type) {
+        assert!(t == Type::I32);
+        self.stack.push(Type::I32)
+    }
+
+    fn push(&mut self, t: Type) {
+        self.stack.push(t)
+    }
+
+    fn pop(&mut self) -> Type {
+        self.stack.pop().unwrap()
+    }
+
+    fn set_local(&mut self, idx: i32, val: Type) {
+        self.locals[idx as usize] = val;
+    }
+
+    fn get_local(&mut self, idx: i32) -> Type {
+        self.locals[idx as usize]
+    }
+
+    fn start_block(&mut self, _ty_index: usize) {
+        self.ctl_stack.push(self.ctl_entries.len());
+        self.ctl_entries.push(CtlEntry {
+            tipe: CtlType::Block,
+            cont_ip: 0, // filled in later
+            cont_stp: self.sidetable_meta.len() - 1,
+        });
+    }
+
+    fn start_loop(&mut self, _ty_index: usize) { 
+        self.ctl_stack.push(self.ctl_entries.len());
+        self.ctl_entries.push(CtlEntry {
+            tipe: CtlType::Loop,
+            cont_ip: self.codeptr.ip,
+            cont_stp: self.sidetable_meta.len() - 1,
+        });
+    }
+
+    fn i32_add(&mut self, _: Type, _: Type) -> Type {
+        Type::I32
+    }
+
+    fn i32_eqz(&mut self, t: Type) -> Idk {
+        assert!(t == Type::I32);
+        Idk
+    }
+
+    fn branch(&mut self, label_idx: usize) -> usize {
+        let ctl_idx = self.ctl_stack.last().unwrap() - label_idx;
+        self.sidetable_meta.push(SidetableMeta {
+            br_ip: self.codeptr.ip,
+            target_ctl_idx: ctl_idx,
+        });
+
+        return self.stack.len();
+    }
+
+    fn fallthru(&mut self) -> usize {
+        return self.stack.len();
+    }
+
+    fn merge(&mut self, other: Self::MergeState) {
+        // TODO: this doesn't work because we haven't run the block yet
+        assert!(self.stack.len() == other);
+    }
+
+    fn end(&mut self) {
+        let ctl_idx = self.ctl_stack.pop().unwrap();
+        let ctl = &mut self.ctl_entries[ctl_idx];
+        if ctl.tipe == CtlType::Block {
+            ctl.cont_ip = self.codeptr.ip;
+            ctl.cont_stp = self.sidetable_meta.len() - 1;
+        }
+    }
 }
