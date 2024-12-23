@@ -3,7 +3,13 @@ use std::marker::PhantomData;
 use crate::Run;
 use std::collections::VecDeque;
 
-// With run(), control is through codedptr, but we can still merge
+// TODO:
+// we really want two types of CBD implementations,
+// one for abstract interpretation characterized by straight
+// line interpretation and merges, and a separate one for
+// concrete interpretation
+
+// With run(), control is through codeptr, but we can still merge
 // through MergeState and hit every branch because of Balloon.
 // With compile, codeptr is ignored, and we hit each block potentially
 // multiple times because of the worklist
@@ -122,8 +128,8 @@ pub trait CBD_FR {
     fn cbd_br_if(&mut self) {
         let label_idx = self.codeptr_mut().read_imm_i32();
         let condv = self.popi();
-        let condb = self.i32_eqz(condv); // make it a member fn just in case it could mutate,
-                                          // like for compiler
+        let condb = self.i32_eqz(condv); 
+
         mif! {self:
             if (condb) then {
                 self.fallthru()
@@ -370,34 +376,6 @@ impl AbstractCompiler {
     }
 }
 
-// pub struct CompiledFun<I: CBD_FR> {
-//     pub conts: Vec<Box<dyn Fn(*const CompiledFun<I>, &mut I)>>,
-// }
-
-// impl WASMFun {
-//     pub fn compile_fr<I: CBD_FR + Run>(&mut self, mut interpretation: I) -> CompiledFun<I> {
-//         let mut res = CompiledFun { conts: vec![] };
-//         for current_block in 0..self.cont_blocks.len() {
-//             let start_ip = self.cont_blocks[current_block].ip;
-//             let tgt_block = self.cont_blocks[current_block].br_tgt;
-
-//             let fallthru_block = current_block + 1;
-
-//             res.conts.push(Box::new(
-//                 move |compiled: *const CompiledFun<I>, i: &mut I| unsafe {
-//                     i.codeptr_mut().ip = start_ip;
-//                     while let Some(op) = i.codeptr_mut().read_op() {
-//                         match op {
-//                             _ => i.step(op)
-//                         }
-//                     }
-//                 }
-//             ));
-//         }
-
-//         res
-//     }
-// }
 
 #[test]
 fn test_gen() {

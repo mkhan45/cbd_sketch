@@ -8,6 +8,8 @@ mod frfr;
 
 use frfr::{CBD_FR, EvalFR, AbstractCompiler};
 
+mod separated;
+
 #[cfg(test)]
 mod test;
 
