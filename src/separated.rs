@@ -17,7 +17,12 @@ pub trait CBDBase {
     fn get_local(&mut self, idx: i32) -> Self::LocalVal;
 
     fn i32_add(&mut self, x: Self::I32Val, y: Self::I32Val) -> Self::I32Val;
+
+    // TODO: which trait does this go in?
     fn i32_eqz(&mut self, x: Self::I32Val) -> bool;
+
+    fn start_block(&mut self, ty_index: usize);
+    fn start_loop(&mut self, ty_index: usize);
 }
 
 // with this CBD, implementations must implement their own control flow primitives
@@ -131,6 +136,9 @@ impl CBDBase for EvalSeparated {
     fn i32_eqz(&mut self, x: i32) -> bool {
         x == 0
     }
+
+    fn start_block(&mut self, _ty_index: usize) {}
+    fn start_loop(&mut self, _ty_index: usize) {}
 }
 
 impl CBDCtl for EvalSeparated {
@@ -167,3 +175,75 @@ impl CBDCtl for EvalSeparated {
 //        trait with no-ops
 //      - and a validator by implementing abstract stuff in sane ways, but not necessarily
 //        similarly to how the base validator works
+
+pub struct SeparatedValidate {
+    pub stack: Vec<Type>,
+    pub locals: Vec<Type>,
+    pub ctl_entries: Vec<CtlEntry>,
+    pub ctl_stack: Vec<usize>,
+    pub codeptr: CodePtr,
+    pub sidetable_meta: Vec<SidetableMeta>, // idx = br_index
+}
+
+impl CBDBase for SeparatedValidate {
+    type I32Val = Type;
+    type StackVal = Type;
+    type LocalVal = Type;
+
+    fn popi(&mut self) -> Type {
+        assert!(self.stack.pop().is_some_and(|t| t == Type::I32));
+        Type::I32
+    }
+
+    fn pushi_imm(&mut self, _: i32) {
+        self.stack.push(Type::I32)
+    }
+
+    fn pushi(&mut self, t: Type) {
+        assert!(t == Type::I32);
+        self.stack.push(Type::I32)
+    }
+
+    fn push(&mut self, t: Type) {
+        self.stack.push(t)
+    }
+
+    fn pop(&mut self) -> Type {
+        self.stack.pop().unwrap()
+    }
+
+    fn set_local(&mut self, idx: i32, val: Type) {
+        self.locals[idx as usize] = val;
+    }
+
+    fn get_local(&mut self, idx: i32) -> Type {
+        self.locals[idx as usize]
+    }
+
+    fn start_block(&mut self, _ty_index: usize) {
+        self.ctl_stack.push(self.ctl_entries.len());
+        self.ctl_entries.push(CtlEntry {
+            tipe: CtlType::Block,
+            cont_ip: 0, // filled in later
+            cont_stp: self.sidetable_meta.len() - 1,
+        });
+    }
+
+    fn start_loop(&mut self, _ty_index: usize) { 
+        self.ctl_stack.push(self.ctl_entries.len());
+        self.ctl_entries.push(CtlEntry {
+            tipe: CtlType::Loop,
+            cont_ip: self.codeptr.ip,
+            cont_stp: self.sidetable_meta.len() - 1,
+        });
+    }
+
+    fn i32_add(&mut self, _: Type, _: Type) -> Type {
+        Type::I32
+    }
+
+    fn i32_eqz(&mut self, t: Type) -> Idk {
+        assert!(t == Type::I32);
+        Idk
+    }
+}
