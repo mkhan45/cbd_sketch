@@ -5,6 +5,9 @@ pub trait CBDBase {
     type I32Val;
     type StackVal: Clone + Into<Self::LocalVal>;
     type LocalVal: Clone + Into<Self::StackVal>;
+    type CondVal: Balloon;
+
+    fn codeptr_mut(&mut self) -> &mut CodePtr;
 
     fn popi(&mut self) -> Self::I32Val;
     fn pushi_imm(&mut self, x: i32);
@@ -19,44 +22,10 @@ pub trait CBDBase {
     fn i32_add(&mut self, x: Self::I32Val, y: Self::I32Val) -> Self::I32Val;
 
     // TODO: which trait does this go in?
-    fn i32_eqz(&mut self, x: Self::I32Val) -> bool;
+    fn i32_eqz(&mut self, x: Self::I32Val) -> Self::CondVal;
 
     fn start_block(&mut self, ty_index: usize);
     fn start_loop(&mut self, ty_index: usize);
-}
-
-// with this CBD, implementations must implement their own control flow primitives
-// we have to think of intra vs inter opcode branching
-pub trait CBDCtl: CBDBase {
-    type CondVal: Balloon;
-
-    fn codeptr_mut(&mut self) -> &mut CodePtr;
-
-    fn branch(&mut self, label_idx: usize);
-    fn fallthru(&mut self);
-    fn end(&mut self);
-
-    fn cbd_br(&mut self) {
-        let label_idx = self.codeptr_mut().read_imm_i32();
-        self.branch(label_idx as usize);
-    }
-
-    fn cbd_br_if(&mut self) {
-        let label_idx = self.codeptr_mut().read_imm_i32();
-        let condv = self.popi();
-        let condb = self.i32_eqz(condv); 
-
-        if condb.maybe_true() {
-            self.fallthru()
-        }
-        if condb.maybe_false() {
-            self.branch(label_idx as usize)
-        }
-    }
-
-    fn cbd_end(&mut self) {
-        self.end();
-    }
 
     fn cbd_i32_const(&mut self) {
         let x = self.codeptr_mut().read_imm_i32();
@@ -84,9 +53,39 @@ pub trait CBDCtl: CBDBase {
 
     fn cbd_local_tee(&mut self) {
         let idx = self.codeptr_mut().read_imm_i32();
-        let val = self.pop(); // TODO: peek()?
+        let val = self.pop();
         self.push(val.clone());
         self.set_local(idx, val.into());
+    }
+}
+
+// with this CBD, implementations must implement their own control flow primitives
+// we have to think of intra vs inter opcode branching
+pub trait CBDCtl: CBDBase {
+    fn branch(&mut self, label_idx: usize);
+    fn fallthru(&mut self);
+    fn end(&mut self);
+
+    fn cbd_br(&mut self) {
+        let label_idx = self.codeptr_mut().read_imm_i32();
+        self.branch(label_idx as usize);
+    }
+
+    fn cbd_br_if(&mut self) {
+        let label_idx = self.codeptr_mut().read_imm_i32();
+        let condv = self.popi();
+        let condb = self.i32_eqz(condv); 
+
+        if condb.maybe_true() {
+            self.fallthru()
+        }
+        if condb.maybe_false() {
+            self.branch(label_idx as usize)
+        }
+    }
+
+    fn cbd_end(&mut self) {
+        self.end();
     }
 }
 
@@ -102,6 +101,12 @@ impl CBDBase for EvalSeparated {
     type I32Val = i32;
     type StackVal = i32;
     type LocalVal = i32;
+    type CondVal = bool;
+
+    fn codeptr_mut(&mut self) -> &mut CodePtr {
+        &mut self.codeptr
+    }
+
 
     fn popi(&mut self) -> i32 {
         self.stack.pop().unwrap()
@@ -142,12 +147,6 @@ impl CBDBase for EvalSeparated {
 }
 
 impl CBDCtl for EvalSeparated {
-    type CondVal = bool;
-
-    fn codeptr_mut(&mut self) -> &mut CodePtr {
-        &mut self.codeptr
-    }
-
     fn branch(&mut self, _label_idx: usize) {
         self.stp += 1;
         let ste = self.sidetable[self.stp];
@@ -189,6 +188,12 @@ impl CBDBase for SeparatedValidate {
     type I32Val = Type;
     type StackVal = Type;
     type LocalVal = Type;
+    type CondVal = Idk;
+
+    fn codeptr_mut(&mut self) -> &mut CodePtr {
+        &mut self.codeptr
+    }
+
 
     fn popi(&mut self) -> Type {
         assert!(self.stack.pop().is_some_and(|t| t == Type::I32));
@@ -246,4 +251,44 @@ impl CBDBase for SeparatedValidate {
         assert!(t == Type::I32);
         Idk
     }
+}
+
+impl CBDCtl for SeparatedValidate {
+    fn branch(&mut self, label_idx: usize) {
+        let ctl_idx = self.ctl_stack.last().unwrap() - label_idx;
+        self.sidetable_meta.push(SidetableMeta {
+            br_ip: self.codeptr.ip,
+            target_ctl_idx: ctl_idx,
+        });
+        // validate
+    }
+
+    fn fallthru(&mut self) {
+        // validate
+    }
+
+    fn end(&mut self) {
+        let ctl_idx = self.ctl_stack.pop().unwrap();
+        let ctl = &mut self.ctl_entries[ctl_idx];
+        if ctl.tipe == CtlType::Block {
+            ctl.cont_ip = self.codeptr.ip;
+            ctl.cont_stp = self.sidetable_meta.len() - 1;
+        }
+    }
+}
+
+pub trait CBDAbstract: CBDBase {
+    type MergeState;
+    fn merge(&mut self, other: &Self::MergeState);
+    fn merge_state(&self) -> &Self::MergeState;
+}
+
+// could have this for normal runner
+// as well
+pub struct CBDAI<T: CBDAbstract> {
+    pub interpreter: T,
+    pub states: Vec<T::MergeState>,
+}
+
+impl<T: CBDAbstract> CBDAI<T> {
 }
