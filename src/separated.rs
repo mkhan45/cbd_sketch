@@ -287,8 +287,13 @@ pub trait CBDAbstract: CBDBase {
 // as well
 pub struct CBDAI<T: CBDAbstract> {
     pub interpreter: T,
+
     pub states: Vec<T::MergeState>,
+    pub ctl_stack: Vec<usize>,
 }
 
 impl<T: CBDAbstract> CBDAI<T> {
+    pub fn run(&mut self, code: Vec<CodeEntry>) {
+        todo!();
+    }
 }
