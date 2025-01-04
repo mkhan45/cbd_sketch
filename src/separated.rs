@@ -1,4 +1,4 @@
-use crate::{CodePtr, CodeEntry, Balloon, STEntry, Idk, Type, CtlEntry, SidetableMeta, CtlType};
+use crate::{Opcode, CodePtr, CodeEntry, Balloon, STEntry, Idk, Type, CtlEntry, SidetableMeta, CtlType};
 
 // base CBD which doesn't have any control flow
 pub trait CBDBase {
@@ -278,9 +278,9 @@ impl CBDCtl for SeparatedValidate {
 }
 
 pub trait CBDAbstract: CBDBase {
-    type MergeState;
+    type MergeState: Default;
     fn merge(&mut self, other: &Self::MergeState);
-    fn merge_state(&self) -> &Self::MergeState;
+    fn merge_state(&self) -> Self::MergeState;
 }
 
 // could have this for normal runner
@@ -292,8 +292,58 @@ pub struct CBDAI<T: CBDAbstract> {
     pub ctl_stack: Vec<usize>,
 }
 
+pub enum AICtlTy {
+    Func,
+    Block,
+    Loop,
+}
+
+pub struct AICtlEntry<T: Default> {
+    pub state: T,
+    pub ctl_ty: AICtlTy,
+}
+
 impl<T: CBDAbstract> CBDAI<T> {
     pub fn run(&mut self, code: Vec<CodeEntry>) {
-        todo!();
+        let interpreter = &mut self.interpreter;
+        let mut codeptr = CodePtr { code, ip: 0 };
+        let mut ctls: Vec<AICtlEntry<T::MergeState>> = vec![AICtlEntry{
+            ctl_ty: AICtlTy::Func,
+            state: T::MergeState::default(),
+        }];
+        let mut ctl_stack: Vec<usize> = vec![0];
+
+        while let Some(op) = codeptr.read_op() {
+            // TODO: track all entry points like in proj4,
+            // not just structure blocks
+            match op {
+                Opcode::Block => {
+                    ctl_stack.push(ctls.len());
+                    ctls.push(AICtlEntry {
+                        ctl_ty: AICtlTy::Block,
+                        state: interpreter.merge_state(),
+                    });
+                }
+                Opcode::Loop => {
+                    ctl_stack.push(ctls.len());
+                    ctls.push(AICtlEntry {
+                        ctl_ty: AICtlTy::Loop,
+                        state: interpreter.merge_state(),
+                    });
+                }
+                Opcode::End => {
+                }
+                Opcode::Br => {
+                }
+                Opcode::BrIf => {
+                }
+                
+                // non-ctl stuff, should be op_dispatch!
+                Opcode::I32Const => interpreter.cbd_i32_const(),
+                Opcode::I32Add => interpreter.cbd_i32_add(),
+                Opcode::LocalSet => interpreter.cbd_local_set(),
+                Opcode::LocalGet => interpreter.cbd_local_get(),
+            }
+        }
     }
 }
