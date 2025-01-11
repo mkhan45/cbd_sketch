@@ -107,7 +107,6 @@ impl CBDBase for EvalSeparated {
         &mut self.codeptr
     }
 
-
     fn popi(&mut self) -> i32 {
         self.stack.pop().unwrap()
     }
@@ -292,46 +291,47 @@ pub struct CBDAI<T: CBDAbstract> {
     pub ctl_stack: Vec<usize>,
 }
 
-pub enum AICtlTy {
-    Func,
-    Block,
-    Loop,
-}
-
-pub struct AICtlEntry<T: Default> {
-    pub state: T,
-    pub ctl_ty: AICtlTy,
+pub enum AICtl {
+    Func { ret_cfg_idx: usize },
+    Block { end_cfg_idx: usize },
+    Loop { start_cfg_idx: usize, end_cfg_idx: usize },
 }
 
 impl<T: CBDAbstract> CBDAI<T> {
     pub fn run(&mut self, code: Vec<CodeEntry>) {
         let interpreter = &mut self.interpreter;
         let mut codeptr = CodePtr { code, ip: 0 };
-        let mut ctls: Vec<AICtlEntry<T::MergeState>> = vec![AICtlEntry{
-            ctl_ty: AICtlTy::Func,
-            state: T::MergeState::default(),
-        }];
+        let mut ctls: Vec<AICtl> = vec![ AICtl::Func { ret_cfg_idx: 0 }, ];
         let mut ctl_stack: Vec<usize> = vec![0];
+        let mut cfg_states: Vec<Option<T::MergeState>> = vec![None];
 
         while let Some(op) = codeptr.read_op() {
             // TODO: track all entry points like in proj4,
             // not just structure blocks
+            //
+            // we need to track both ctl stack and continuation graph
             match op {
                 Opcode::Block => {
                     ctl_stack.push(ctls.len());
-                    ctls.push(AICtlEntry {
-                        ctl_ty: AICtlTy::Block,
-                        state: interpreter.merge_state(),
-                    });
+                    ctls.push(AICtl::Block { end_cfg_idx: cfg_states.len() });
+                    cfg_states.push(None);
                 }
                 Opcode::Loop => {
                     ctl_stack.push(ctls.len());
-                    ctls.push(AICtlEntry {
-                        ctl_ty: AICtlTy::Loop,
-                        state: interpreter.merge_state(),
-                    });
+                    let start_cfg_idx = cfg_states.len();
+                    cfg_states.push(Some(interpreter.merge_state()));
+                    let end_cfg_idx = cfg_states.len();
+                    cfg_states.push(None);
+                    ctls.push(AICtl::Loop { start_cfg_idx, end_cfg_idx });
                 }
                 Opcode::End => {
+                    let ctl_idx = ctl_stack.pop().unwrap();
+                    let ctl = &ctls[ctl_idx];
+                    match ctl {
+                        AICtl::Func { ret_cfg_idx } => todo!(),
+                        AICtl::Block { end_cfg_idx } => todo!(),
+                        AICtl::Loop { start_cfg_idx, end_cfg_idx } => todo!(),
+                    }
                 }
                 Opcode::Br => {
                 }
