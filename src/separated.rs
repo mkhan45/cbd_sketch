@@ -328,11 +328,18 @@ impl<T: CBDAbstract> CBDAI<T> {
                     let ctl_idx = ctl_stack.pop().unwrap();
                     let ctl = &ctls[ctl_idx];
                     match ctl {
+                        // merge into ret
                         AICtl::Func { ret_cfg_idx } => todo!(),
+
+                        // merge into end
                         AICtl::Block { end_cfg_idx } => todo!(),
+                        
+                        // merge end, could combine with block match?
                         AICtl::Loop { start_cfg_idx, end_cfg_idx } => todo!(),
                     }
                 }
+
+                // merge into target
                 Opcode::Br => {
                 }
                 Opcode::BrIf => {
