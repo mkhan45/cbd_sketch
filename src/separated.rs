@@ -87,6 +87,16 @@ pub trait CBDCtl: CBDBase {
     fn cbd_end(&mut self) {
         self.end();
     }
+
+    fn cbd_block(&mut self) {
+        let ty = self.codeptr_mut().read_block_type();
+        self.start_block(ty);
+    }
+
+    fn cbd_loop(&mut self) {
+        let ty = self.codeptr_mut().read_block_type();
+        self.start_loop(ty);
+    }
 }
 
 pub struct EvalSeparated {
@@ -279,6 +289,7 @@ impl CBDCtl for SeparatedValidate {
 pub trait CBDAbstract: CBDBase {
     type MergeState: Default;
     fn merge(&mut self, other: &Self::MergeState);
+    fn merge_into(&self, other: &mut Self::MergeState);
     fn merge_state(&self) -> Self::MergeState;
 }
 
@@ -306,43 +317,60 @@ impl<T: CBDAbstract> CBDAI<T> {
         let mut cfg_states: Vec<Option<T::MergeState>> = vec![None];
 
         while let Some(op) = codeptr.read_op() {
-            // TODO: track all entry points like in proj4,
-            // not just structure blocks
-            //
-            // we need to track both ctl stack and continuation graph
             match op {
                 Opcode::Block => {
+                    // blocks go on the CTL stack, and have a CFG node
+                    // for the end label
                     ctl_stack.push(ctls.len());
                     ctls.push(AICtl::Block { end_cfg_idx: cfg_states.len() });
                     cfg_states.push(None);
                 }
                 Opcode::Loop => {
+                    // loops go on the CTL stack, and create a CFG
+                    // node for both the start and end labels
                     ctl_stack.push(ctls.len());
+
+                    // we already have the intial state for the start label
                     let start_cfg_idx = cfg_states.len();
                     cfg_states.push(Some(interpreter.merge_state()));
+
                     let end_cfg_idx = cfg_states.len();
                     cfg_states.push(None);
                     ctls.push(AICtl::Loop { start_cfg_idx, end_cfg_idx });
                 }
                 Opcode::End => {
+                    // Ends pop from CTL stack and start a CFG node
                     let ctl_idx = ctl_stack.pop().unwrap();
                     let ctl = &ctls[ctl_idx];
-                    match ctl {
-                        // merge into ret
-                        AICtl::Func { ret_cfg_idx } => todo!(),
+                    let target_cfg_idx = match ctl {
+                        AICtl::Func { ret_cfg_idx } => ret_cfg_idx,
+                        AICtl::Block { end_cfg_idx } | AICtl::Loop { end_cfg_idx, .. } => end_cfg_idx,
+                    };
 
-                        // merge into end
-                        AICtl::Block { end_cfg_idx } => todo!(),
-                        
-                        // merge end, could combine with block match?
-                        AICtl::Loop { start_cfg_idx, end_cfg_idx } => todo!(),
+                    if let Some(s) = cfg_states[*target_cfg_idx].as_mut() {
+                        interpreter.merge_into(s);
+                    } else {
+                        cfg_states[*target_cfg_idx] = Some(interpreter.merge_state());
                     }
                 }
 
                 // merge into target
-                Opcode::Br => {
-                }
-                Opcode::BrIf => {
+                Opcode::Br | Opcode::BrIf => {
+                    let label_offset = codeptr.read_imm_i32() as usize;
+                    let target_ctl = &ctls[ctls.len() - 1 - label_offset];
+                    let target_cfg_idx = match target_ctl {
+                        AICtl::Func { ret_cfg_idx } => ret_cfg_idx,
+                        AICtl::Block { end_cfg_idx } => end_cfg_idx,
+
+                        // breaking out of a loop goes to start, not end
+                        AICtl::Loop { start_cfg_idx, .. } => start_cfg_idx,
+                    };
+
+                    if let Some(s) = cfg_states[*target_cfg_idx].as_mut() {
+                        interpreter.merge_into(s);
+                    } else {
+                        cfg_states[*target_cfg_idx] = Some(interpreter.merge_state());
+                    }
                 }
                 
                 // non-ctl stuff, should be op_dispatch!
