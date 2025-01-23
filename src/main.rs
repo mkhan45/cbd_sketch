@@ -9,7 +9,7 @@ mod frfr;
 use frfr::{CBD_FR, EvalFR, AbstractCompiler};
 
 mod separated;
-use separated::CBDCtl;
+use separated::{CBDCtl, EvalSeparated, CBDAI};
 
 #[cfg(test)]
 mod test;
@@ -163,6 +163,8 @@ pub enum CodeEntry {
     I32Imm(i32),
     BlockType(usize),
 }
+
+#[derive(Clone, Debug)]
 pub struct CodePtr {
     pub code: Vec<CodeEntry>,
     pub ip: usize,
@@ -573,7 +575,24 @@ fn main() {
         stp: 0,
     };
     ac.run();
-    dbg!(&ac.block_bodies);
-    let code = ac.emit();
-    println!("{}", code);
+    //dbg!(&ac.block_bodies);
+    let code_str = ac.emit();
+    //println!("{}", code_str);
+
+
+    let eval_separate = EvalSeparated {
+        stack: vec![],
+        locals: vec![0; nlocals],
+        codeptr: CodePtr { code: code.clone(), ip: 0 },
+        sidetable: sidetable.clone(),
+        stp: 0,
+    };
+
+    let mut eval_via_ai = CBDAI {
+        interpreter: eval_separate,
+        states: vec![],
+    };
+    eval_via_ai.run(code.clone());
+    dbg!(eval_via_ai.states);
+    dbg!(eval_via_ai.interpreter.stack);
 }

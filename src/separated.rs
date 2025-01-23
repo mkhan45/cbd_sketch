@@ -293,13 +293,18 @@ pub trait CBDAbstract: CBDBase {
     fn merge_state(&self) -> Self::MergeState;
 }
 
+impl CBDAbstract for EvalSeparated {
+    type MergeState = ();
+    fn merge(&mut self, other: &()) {}
+    fn merge_into(&self, other: &mut ()) {}
+    fn merge_state(&self) { () }
+}
+
 // could have this for normal runner
 // as well
 pub struct CBDAI<T: CBDAbstract> {
     pub interpreter: T,
-
-    pub states: Vec<T::MergeState>,
-    pub ctl_stack: Vec<usize>,
+    pub states: Vec<Option<T::MergeState>>,
 }
 
 pub enum AICtl {
@@ -312,20 +317,32 @@ impl<T: CBDAbstract> CBDAI<T> {
     pub fn run(&mut self, code: Vec<CodeEntry>) {
         let interpreter = &mut self.interpreter;
         let mut codeptr = CodePtr { code, ip: 0 };
+        interpreter.codeptr_mut().code = codeptr.code.clone();
+        interpreter.codeptr_mut().ip = 0;
+
         let mut ctls: Vec<AICtl> = vec![ AICtl::Func { ret_cfg_idx: 0 }, ];
         let mut ctl_stack: Vec<usize> = vec![0];
         let mut cfg_states: Vec<Option<T::MergeState>> = vec![None];
 
+        // TODO: worklist
         while let Some(op) = codeptr.read_op() {
+            dbg!(op, codeptr.ip);
+            interpreter.codeptr_mut().ip = codeptr.ip;
             match op {
                 Opcode::Block => {
                     // blocks go on the CTL stack, and have a CFG node
                     // for the end label
+                    let _bt = codeptr.read_block_type();
+                    interpreter.codeptr_mut().ip = codeptr.ip;
+
                     ctl_stack.push(ctls.len());
                     ctls.push(AICtl::Block { end_cfg_idx: cfg_states.len() });
                     cfg_states.push(None);
                 }
                 Opcode::Loop => {
+                    let _bt = codeptr.read_block_type();
+                    interpreter.codeptr_mut().ip = codeptr.ip;
+
                     // loops go on the CTL stack, and create a CFG
                     // node for both the start and end labels
                     ctl_stack.push(ctls.len());
@@ -357,6 +374,8 @@ impl<T: CBDAbstract> CBDAI<T> {
                 // merge into target
                 Opcode::Br | Opcode::BrIf => {
                     let label_offset = codeptr.read_imm_i32() as usize;
+                    interpreter.codeptr_mut().ip = codeptr.ip;
+
                     let target_ctl = &ctls[ctls.len() - 1 - label_offset];
                     let target_cfg_idx = match target_ctl {
                         AICtl::Func { ret_cfg_idx } => ret_cfg_idx,
@@ -379,6 +398,10 @@ impl<T: CBDAbstract> CBDAI<T> {
                 Opcode::LocalSet => interpreter.cbd_local_set(),
                 Opcode::LocalGet => interpreter.cbd_local_get(),
             }
+
+            codeptr.ip = interpreter.codeptr_mut().ip;
         }
+
+        self.states = cfg_states;
     }
 }
