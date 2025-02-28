@@ -1,4 +1,4 @@
-use crate::{Opcode, CodePtr, CodeEntry, Balloon, STEntry, Idk, Type, CtlEntry, SidetableMeta, CtlType};
+use crate::{Opcode, CodePtr, CodeEntry, Balloon, STEntry, Idk, Type, CtlEntry, SidetableMeta, CtlType, STEntry};
 
 use std::collections::VecDeque;
 
@@ -453,154 +453,51 @@ pub enum AICtl {
 //}
 
 impl<T: CBDAbstract> CBDAI<T> {
-    pub fn run(&mut self, code: Vec<CodeEntry>) {
+    pub fn run(&mut self, code: Vec<CodeEntry>, sidetable: Vec<STEntry>) {
         let mut codeptr = CodePtr { code, ip: 0 };
-        let mut worklist = VecDeque::new();
+        let mut worklist: VecDeque<(usize, usize)> = VecDeque::new();
         
         // Initialize states with function entry point
-        let mut cfg_states = vec![Some(self.interpreter.merge_state())];
-        let mut state_ips = vec![0]; // Starting IP for each state
-        let mut ctls = vec![AICtl::Func { ret_cfg_idx: 0 }];
-        let mut ctl_stack = vec![0];
-        worklist.push_back(0);
+        let mut cfg_states: Vec<Option<T::MergeState>> = (0..codeptr.code.len()).map(|_| None).collect();
+        cfg_states[0] = Some(self.interpreter.merge_state());
 
-        while let Some(state_idx) = worklist.pop_front() {
-            dbg!(&worklist);
-            // state should certainly be initialized by now
-            let Some(state) = cfg_states[state_idx].take() else { panic!() };
+        while let Some((ip, stp)) = worklist.pop_front() {
+            codeptr.ip = ip;
 
-            // Restore state and set initial code position
-            self.interpreter.restore_state(&state);
-            codeptr.ip = state_ips[state_idx];
-            self.interpreter.codeptr_mut().ip = codeptr.ip;
-
-            loop {
-                let op = match self.interpreter.codeptr_mut().read_op() {
-                    Some(op) => op,
-                    None => break,
-                };
-
+            let mut stp = stp;
+            while let Some(op) = codeptr.read_op() {
                 match op {
                     Opcode::Block => {
-                        let _bt = self.interpreter.codeptr_mut().read_block_type();
-                        let end_cfg_idx = cfg_states.len();
-                        
-                        // Create new block end state
-                        cfg_states.push(None);
-                        state_ips.push(0);
-                        
-                        ctls.push(AICtl::Block { end_cfg_idx });
-                        ctl_stack.push(ctls.len() - 1);
+                        let _bt = codeptr.read_block_type();
+                        interpreter.codeptr_mut().ip = codeptr.ip;
                     }
-
+                    Opcode::Loop => {
+                        let _bt = codeptr.read_block_type();
+                        interpreter.codeptr_mut().ip = codeptr.ip;
+                    }
                     Opcode::End => {
-                        let ctl_idx = ctl_stack.pop().unwrap();
-                        let target_cfg_idx = match &ctls[ctl_idx] {
-                            AICtl::Func { ret_cfg_idx } => *ret_cfg_idx,
-                            AICtl::Block { end_cfg_idx } => *end_cfg_idx,
-                            AICtl::Loop { end_cfg_idx, .. } => *end_cfg_idx,
-                        };
-
-                        // Ensure target state exists
-                        if cfg_states[target_cfg_idx].is_none() {
-                            cfg_states[target_cfg_idx] = Some(self.interpreter.merge_state());
-                            state_ips[target_cfg_idx] = self.interpreter.codeptr_mut().ip; // Next instruction
-                        }
-
-                        // Merge and schedule if changed
-                        //if self.interpreter.merge_into(
-                        //    cfg_states[target_cfg_idx].as_mut().unwrap()
-                        //) {
-                        //    worklist.push_back(target_cfg_idx);
-                        //}
-
-                        // TODO: don't assume state changed
-                        self.interpreter.merge_into(cfg_states[target_cfg_idx].as_mut().unwrap());
-                        worklist.push_back(target_cfg_idx);
+                        stp += 1;
+                    }
+                    Opcode::Br => {
+                        let label_offset = codeptr.read_imm_i32() as usize;
+                        interpreter.codeptr_mut().ip = codeptr.ip;
+                        
+                        stp += 1;
+                        let ste = &sidetable[stp];
+                        worklist.push((codeptr.ip + ste.ip_delta), (stp + ste.stp_delta));
                         break;
                     }
-
-                    op @ (Opcode::Br | Opcode::BrIf) => {
-                        let label_offset = self.interpreter.codeptr_mut().read_imm_i32() as usize;
-                        let target_ctl = &ctls[ctls.len() - 1 - label_offset];
-                        let target_cfg_idx = match target_ctl {
-                            AICtl::Func { ret_cfg_idx } => *ret_cfg_idx,
-                            AICtl::Block { end_cfg_idx } => *end_cfg_idx,
-                            AICtl::Loop { start_cfg_idx, .. } => *start_cfg_idx,
-                        };
-
-                        // Handle branch conditions
-                        let (do_branch, do_fallthru) = match op {
-                            Opcode::Br => (true, false),
-                            Opcode::BrIf => {
-                                dbg!();
-                                let condv = self.interpreter.popi();
-                                let condb = self.interpreter.i32_eqz(condv);
-                                (dbg!(condb.maybe_false()), dbg!(condb.maybe_true()))
-                            }
-                            _ => unreachable!(),
-                        };
-
-                        if do_branch {
-                            // Initialize target if needed
-                            if cfg_states[target_cfg_idx].is_none() {
-                                cfg_states[target_cfg_idx] = Some(self.interpreter.merge_state());
-                                state_ips[target_cfg_idx] = match target_ctl {
-                                    AICtl::Loop { start_cfg_idx, .. } => state_ips[*start_cfg_idx],
-                                    _ => self.interpreter.codeptr_mut().ip,
-                                };
-                                worklist.push_back(target_cfg_idx);
-                            } else {
-                                // TODO: don't assume state changed
-                                // Merge current state into target
-                                //if self.interpreter.merge_into(
-                                //    cfg_states[target_cfg_idx].as_mut().unwrap()
-                                //) {
-                                //    worklist.push_back(target_cfg_idx);
-                                //}
-
-                                self.interpreter.merge_into(cfg_states[target_cfg_idx].as_mut().unwrap());
-                                worklist.push_back(target_cfg_idx);
-                            }
-                        }
-
-                        if do_fallthru {
-                            codeptr.ip = self.interpreter.codeptr_mut().ip;
-                            break;
-                        }
+                    Opcode::BrIf => {
+                        let label_offset = codeptr.read_imm_i32() as usize;
+                        interpreter.codeptr_mut().ip = codeptr.ip;
+                        
+                        stp += 1;
+                        let ste = &sidetable[stp];
+                        worklist.push((codeptr.ip + ste.ip_delta), (stp + ste.stp_delta));
+                        stp = stp + ste.stp_delta;
                     }
-
-                    Opcode::Loop => {
-                        let _bt = self.interpreter.codeptr_mut().read_block_type();
-                        let start_cfg_idx = cfg_states.len();
-                        
-                        // Create new loop header state
-                        cfg_states.push(Some(self.interpreter.merge_state()));
-                        state_ips.push(self.interpreter.codeptr_mut().ip); // Loop back to start
-                        
-                        let end_cfg_idx = cfg_states.len();
-                        cfg_states.push(None);
-                        state_ips.push(0);
-                        
-                        ctls.push(AICtl::Loop { start_cfg_idx, end_cfg_idx });
-                        ctl_stack.push(ctls.len() - 1);
-                    }
-
-                    // non-ctl stuff, should be op_dispatch!
-                    Opcode::I32Const => self.interpreter.cbd_i32_const(),
-                    Opcode::I32Add => self.interpreter.cbd_i32_add(),
-                    Opcode::LocalSet => self.interpreter.cbd_local_set(),
-                    Opcode::LocalGet => self.interpreter.cbd_local_get(),
                 }
-
-                // Update codeptr to match interpreter's final position
-                codeptr.ip = self.interpreter.codeptr_mut().ip;
             }
-
-            // Persist final state even if unchanged (crucial for loops)
-            cfg_states[state_idx] = Some(self.interpreter.merge_state());
         }
-
-        self.states = cfg_states;
     }
 }
